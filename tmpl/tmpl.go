@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"net/url"
+	"os"
 	"strings"
 	"text/template"
 	"time"
@@ -48,6 +49,33 @@ func init() {
 			return fmt.Sprintf("[%s](%s)", k, v)
 		},
 		"contains": strings.Contains,
+		// IDC: severity → 飞书卡片 header 颜色
+		"severityColor": func(sev string) string {
+			switch strings.ToLower(sev) {
+			case "critical":
+				return "red"
+			case "error":
+				return "orange"
+			case "warn", "warning":
+				return "yellow"
+			case "info":
+				return "grey"
+			default:
+				return "blue"
+			}
+		},
+		// IDC: 把 asset_id 渲染成飞书 markdown 链接，跳回 IDC handbook
+		// 未配置 HANDBOOK_BASE_URL 时退化成 `asset_id` 纯文本
+		"assetLink": func(assetID string) string {
+			if assetID == "" {
+				return ""
+			}
+			base := strings.TrimRight(os.Getenv("HANDBOOK_BASE_URL"), "/")
+			if base == "" {
+				return fmt.Sprintf("`%s`", assetID)
+			}
+			return fmt.Sprintf("[%s](%s/%s)", assetID, base, assetID)
+		},
 	}
 
 	// embed

@@ -5,6 +5,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/xujiahua/alertmanager-webhook-feishu/model"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,6 +15,63 @@ func TestFeishuCard(t *testing.T) {
 	et := embedTemplates["default.tmpl"]
 	err := et.Execute(os.Stdout, alerts)
 	require.Nil(t, err)
+}
+
+func TestIDCAlertTemplate(t *testing.T) {
+	t.Run("with HANDBOOK_BASE_URL", func(t *testing.T) {
+		os.Setenv("HANDBOOK_BASE_URL", "https://handbook.example.com/")
+		defer os.Unsetenv("HANDBOOK_BASE_URL")
+
+		alert := model.Alert{
+			Status: "firing",
+			Labels: map[string]string{
+				"asset_id": "vm-axis-yu",
+				"severity": "critical",
+				"source":   "verify-sh",
+			},
+			Annotations: map[string]string{
+				"summary":     "vm down",
+				"description": "axis-yu ssh probe failed 3 times",
+			},
+			StartsAt: time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
+		}
+		et := embedTemplates["idc_alert.tmpl"]
+		require.NotNil(t, et, "idc_alert.tmpl should be loaded")
+
+		buf := &strings.Builder{}
+		err := et.Execute(buf, alert)
+		require.Nil(t, err)
+
+		out := buf.String()
+		t.Log(out)
+		// 验证 wikilink 渲染（trailing slash 应被去除）
+		require.Contains(t, out, "[vm-axis-yu](https://handbook.example.com/vm-axis-yu)")
+		require.Contains(t, out, "**严重度**：`CRITICAL`")
+		require.Contains(t, out, "axis-yu ssh probe failed")
+	})
+
+	t.Run("without HANDBOOK_BASE_URL falls back to inline code", func(t *testing.T) {
+		os.Unsetenv("HANDBOOK_BASE_URL")
+		alert := model.Alert{
+			Labels: map[string]string{"asset_id": "host-axis", "severity": "error"},
+		}
+		buf := &strings.Builder{}
+		err := embedTemplates["idc_alert.tmpl"].Execute(buf, alert)
+		require.Nil(t, err)
+		require.Contains(t, buf.String(), "`host-axis`")
+		require.NotContains(t, buf.String(), "http")
+	})
+
+	t.Run("severityColor mapping", func(t *testing.T) {
+		fn := funcMap["severityColor"].(func(string) string)
+		require.Equal(t, "red", fn("critical"))
+		require.Equal(t, "red", fn("CRITICAL"))
+		require.Equal(t, "orange", fn("error"))
+		require.Equal(t, "yellow", fn("warn"))
+		require.Equal(t, "yellow", fn("warning"))
+		require.Equal(t, "grey", fn("info"))
+		require.Equal(t, "blue", fn("unknown"))
+	})
 }
 
 // copyright: https://github.com/tomtom-international/alertmanager-webhook-logger/blob/master/main_test.go#L132
