@@ -1,4 +1,27 @@
-# alertmanager-webhook-feishu
+# idc-alert-feishu
+
+> Fork of [XUJiahua/alertmanager-webhook-feishu](https://github.com/XUJiahua/alertmanager-webhook-feishu),
+> 定制为 [idc-alert-hub](https://github.com/bendusy/idc-alert-hub) 的飞书出口适配器。
+
+## IDC fork 改造内容
+
+相对上游的差异（保持 upstream remote 便于追踪）：
+
+- **`tmpl/templates/idc_alert.tmpl`** — IDC 告警单条目模板，渲染 `asset_id` / `severity` / `source` / `summary` / `description`。
+- **`tmpl/templates/idc.tmpl`** — IDC 卡片外层模板，header 颜色按 severity 自动着色。
+- **`severityColor` funcMap** — `critical→red` / `error→orange` / `warn→yellow` / `info→grey` / 其他→`blue`。
+- **`assetLink` funcMap** — `assetLink "vm-app-1"` 渲染成飞书 markdown 超链接，目标 base 由 env `HANDBOOK_BASE_URL` 控制；未设置时退化为 `` `vm-app-1` `` 纯代码块。
+- **Dockerfile** — Go 1.16 → 1.22-alpine，多阶段构建，二进制改名 `idc-alert-feishu`。
+- **Docker 镜像** — `bendusy/idc-alert-feishu`。
+
+### 用法（IDC 场景）
+
+1. Alertmanager receiver 配置 `webhook_configs` 指向本服务 `/hook/<group_name>?tmpl=idc.tmpl`；
+2. 业务方推 Alertmanager 时带 labels：`asset_id`、`severity`、`source`；
+3. 部署设置 `HANDBOOK_BASE_URL=https://your-handbook.example.com`；
+4. 飞书收到的卡片 header 会按 severity 着色，正文里 `asset_id` 一键跳 handbook。
+
+---
 
 ## 自定义机器人
 

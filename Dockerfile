@@ -1,12 +1,13 @@
-FROM golang:1.16
+FROM golang:1.22-alpine AS build
 WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o alertmanager-webhook-feishu .
+RUN CGO_ENABLED=0 GOOS=linux go build -o idc-alert-feishu .
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-RUN apk --no-cache add tzdata
+RUN apk --no-cache add ca-certificates tzdata
 WORKDIR /app
-COPY --from=0 /app/alertmanager-webhook-feishu .
+COPY --from=build /app/idc-alert-feishu .
 EXPOSE 8000
-ENTRYPOINT ["./alertmanager-webhook-feishu"]
+ENTRYPOINT ["./idc-alert-feishu"]

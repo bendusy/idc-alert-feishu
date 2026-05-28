@@ -25,13 +25,13 @@ func TestIDCAlertTemplate(t *testing.T) {
 		alert := model.Alert{
 			Status: "firing",
 			Labels: map[string]string{
-				"asset_id": "vm-axis-yu",
+				"asset_id": "vm-app-1",
 				"severity": "critical",
 				"source":   "verify-sh",
 			},
 			Annotations: map[string]string{
 				"summary":     "vm down",
-				"description": "axis-yu ssh probe failed 3 times",
+				"description": "probe failed 3 times",
 			},
 			StartsAt: time.Date(2026, 5, 28, 10, 0, 0, 0, time.UTC),
 		}
@@ -45,20 +45,20 @@ func TestIDCAlertTemplate(t *testing.T) {
 		out := buf.String()
 		t.Log(out)
 		// 验证 wikilink 渲染（trailing slash 应被去除）
-		require.Contains(t, out, "[vm-axis-yu](https://handbook.example.com/vm-axis-yu)")
+		require.Contains(t, out, "[vm-app-1](https://handbook.example.com/vm-app-1)")
 		require.Contains(t, out, "**严重度**：`CRITICAL`")
-		require.Contains(t, out, "axis-yu ssh probe failed")
+		require.Contains(t, out, "probe failed")
 	})
 
 	t.Run("without HANDBOOK_BASE_URL falls back to inline code", func(t *testing.T) {
 		os.Unsetenv("HANDBOOK_BASE_URL")
 		alert := model.Alert{
-			Labels: map[string]string{"asset_id": "host-axis", "severity": "error"},
+			Labels: map[string]string{"asset_id": "host-nas", "severity": "error"},
 		}
 		buf := &strings.Builder{}
 		err := embedTemplates["idc_alert.tmpl"].Execute(buf, alert)
 		require.Nil(t, err)
-		require.Contains(t, buf.String(), "`host-axis`")
+		require.Contains(t, buf.String(), "`host-nas`")
 		require.NotContains(t, buf.String(), "http")
 	})
 
