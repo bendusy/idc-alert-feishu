@@ -65,3 +65,20 @@ func TestMaxSeverityColor(t *testing.T) {
 	// resolved critical 不影响颜色
 	require.Equal(t, "yellow", color([]amtmpl.Alert{fa("resolved", "critical"), fa("firing", "warn")}))
 }
+
+func TestProjectCN(t *testing.T) {
+	require.Equal(t, "记忆库", projectCN("memory-flow"))
+	require.Equal(t, "办文系统", projectCN("banwen-flow"))
+	require.Equal(t, "基础设施", projectCN("idc-infra"))
+	require.Equal(t, "ArcFlow", projectCN("arcflow"))
+	require.Equal(t, "unknown-proj", projectCN("unknown-proj")) // 未知原样
+}
+
+func TestFirstSummary(t *testing.T) {
+	alerts := []amtmpl.Alert{
+		{Status: "resolved", Annotations: amtmpl.KV{"summary": "已恢复"}},
+		{Status: "firing", Annotations: amtmpl.KV{"summary": "PG 流复制断"}},
+	}
+	require.Equal(t, "PG 流复制断", firstSummary(alerts)) // 跳过 resolved，取 firing
+	require.Equal(t, "", firstSummary(nil))
+}

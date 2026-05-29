@@ -35,6 +35,36 @@ func severityRank(sev string) int {
 	}
 }
 
+// projectCN project label → 中文显示名，用于卡片标题直观展示。
+// 未知 project 原样返回（含空串时返回空，模板侧自行处理）。
+func projectCN(project string) string {
+	switch project {
+	case "idc-infra":
+		return "基础设施"
+	case "memory-flow":
+		return "记忆库"
+	case "banwen-flow":
+		return "办文系统"
+	case "arcflow":
+		return "ArcFlow"
+	default:
+		return project
+	}
+}
+
+// firstSummary 取一组 firing alert 的首条 summary（中文摘要），用于标题展示。
+func firstSummary(alerts []amtmpl.Alert) string {
+	for _, a := range alerts {
+		if a.Status == "resolved" {
+			continue
+		}
+		if s := a.Annotations["summary"]; s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
 // severityToColor severity → 飞书卡片 header 颜色
 func severityToColor(sev string) string {
 	switch strings.ToLower(sev) {
@@ -101,6 +131,10 @@ func init() {
 		"contains": strings.Contains,
 		// IDC: severity → 飞书卡片 header 颜色（单值版，保留兼容现有模板）
 		"severityColor": severityToColor,
+		// IDC: project → 中文显示名（卡片标题直观展示）
+		"projectCN": projectCN,
+		// IDC: 取首条 firing alert 的中文 summary
+		"firstSummary": firstSummary,
 		// IDC: 取一组 firing alert 的 max severity 对应颜色（跨 severity group 下 CommonLabels 丢 severity）
 		// 只算 firing，resolved 不参与，避免已恢复的高 severity 影响卡片颜色
 		"maxSeverityColor": func(alerts []amtmpl.Alert) string {

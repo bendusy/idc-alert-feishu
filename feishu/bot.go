@@ -94,13 +94,15 @@ func getTemplates(tmplConf *config.Template) (*template.Template, *template.Temp
 		return t, nil, nil
 	}
 
-	// by default, use two tmpls, one is for alert
-	dt, err := tmpl.GetEmbedTemplate("default.tmpl")
+	// IDC 专用 fork：默认用 idc 模板（含 maxSeverityColor / mentionIf / 中文项目名）。
+	// 注：上游用 query string ?tmpl= 选模板的设计从未在 Send 链路生效（getTemplates
+	// 只读 config.custom_path），故这里把默认 embed 模板直接定为 idc.tmpl。
+	dt, err := tmpl.GetEmbedTemplate("idc.tmpl")
 	if err != nil {
 		return nil, nil, err
 	}
 
-	dat, err := tmpl.GetEmbedTemplate("default_alert.tmpl")
+	dat, err := tmpl.GetEmbedTemplate("idc_alert.tmpl")
 	if err != nil {
 		return nil, nil, err
 	}
