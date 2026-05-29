@@ -18,6 +18,7 @@ import (
 
 type Bot struct {
 	webhook     string
+	sign        string
 	openIDs     []string
 	rotator     *rotate.MentionRotator
 	sdk         *Sdk
@@ -50,6 +51,7 @@ func New(bot *config.Bot, helper *EmailHelper) (*Bot, error) {
 
 	return &Bot{
 		webhook:     bot.Webhook,
+		sign:        bot.Sign,
 		rotator:     rotator,
 		openIDs:     openIDs,
 		sdk:         NewSDK("", ""),
@@ -139,7 +141,7 @@ func (b Bot) Send(alerts *model.WebhookMessage) error {
 		}
 	}
 
-	return b.sdk.WebhookV2(b.webhook, &buf)
+	return b.sdk.WebhookV2(b.webhook, &buf, b.sign)
 }
 
 // right is immutable

@@ -2,12 +2,16 @@ package feishu
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -132,7 +136,44 @@ type webhookV2Response struct {
 	Msg           string `json:"msg"`
 }
 
-func (s Sdk) WebhookV2(webhook string, body io.Reader) error {
+// genSign 飞书自定义机器人签名校验
+// 算法见 https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot
+// stringToSign = timestamp + "\n" + secret，以其为 HMAC-SHA256 的 key，对空字符串签名
+func genSign(secret string, timestamp int64) string {
+	stringToSign := strconv.FormatInt(timestamp, 10) + "\n" + secret
+	h := hmac.New(sha256.New, []byte(stringToSign))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
+}
+
+// injectSign 把 timestamp/sign 注入飞书消息 body 顶层
+func injectSign(body io.Reader, secret string) (io.Reader, error) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return nil, err
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	timestamp := time.Now().Unix()
+	payload["timestamp"] = strconv.FormatInt(timestamp, 10)
+	payload["sign"] = genSign(secret, timestamp)
+
+	signed, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(signed), nil
+}
+
+func (s Sdk) WebhookV2(webhook string, body io.Reader, sign string) error {
+	if sign != "" {
+		signed, err := injectSign(body, sign)
+		if err != nil {
+			return err
+		}
+		body = signed
+	}
 	logrus.Debug(webhook, body)
 	req, err := http.NewRequest("POST", webhook, body)
 	if err != nil {

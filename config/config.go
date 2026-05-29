@@ -26,6 +26,8 @@ type Bot struct {
 	Template    *Template         `yaml:"template"`
 	TitlePrefix string            `yaml:"title_prefix"`
 	MetaData    map[string]string `yaml:"metadata"`
+	// Sign 飞书自定义机器人「签名校验」密钥，留空则不签名
+	Sign string `yaml:"sign"`
 }
 
 type App struct {
