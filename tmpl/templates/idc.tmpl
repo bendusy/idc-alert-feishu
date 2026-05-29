@@ -8,7 +8,7 @@
 "tag": "plain_text",
 "content": "{{.TitlePrefix}}{{if in .GroupLabels "severity"}}[{{toUpper .GroupLabels.severity}}] {{end}}{{if in .GroupLabels "alertname"}}{{.GroupLabels.alertname}} {{end}}{{if len .FiringAlerts}}🔥{{len .FiringAlerts}} Firing {{end}}{{if len .ResolvedAlerts}}✅{{len .ResolvedAlerts}} Resolved{{end}}"
 },
-"template":"{{if len .FiringAlerts}}{{severityColor (index .GroupLabels "severity")}}{{else}}green{{end}}"
+"template":"{{if len .FiringAlerts}}{{maxSeverityColor .Alerts.Firing}}{{else}}green{{end}}"
 },
 
 "elements": [
@@ -41,7 +41,7 @@
 "elements": [
 {
 "tag": "lark_md",
-"content": "{{range .Meta.SortedPairs}}{{ displayKV .Name .Value}}\t{{end}}{{range .OpenIDs}}<at id={{.}}></at> {{end}}"
+"content": "{{range .Meta.SortedPairs}}{{ displayKV .Name .Value}}\t{{end}}{{ mentionIf .Alerts.Firing .OpenIDs }}"
 }
 ]
 }
