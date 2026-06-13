@@ -3,16 +3,18 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/alertmanager/template"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
-	"github.com/xujiahua/alertmanager-webhook-feishu/feishu"
-	"github.com/xujiahua/alertmanager-webhook-feishu/model"
-	"net/http"
-	"strings"
-	"time"
+
+	"github.com/bendusy/idc-alert-feishu/feishu"
+	"github.com/bendusy/idc-alert-feishu/model"
 )
 
 type Server struct {
@@ -162,11 +164,7 @@ func split(alerts model.WebhookMessage) []model.WebhookMessage {
 }
 
 func (s Server) health(w http.ResponseWriter, r *http.Request) {
-	// TODO
-}
-
-func (s Server) reload(w http.ResponseWriter, r *http.Request) {
-	// TODO
+	_, _ = fmt.Fprintf(w, "ok")
 }
 
 func (s Server) Start(address string) error {
@@ -177,7 +175,6 @@ func (s Server) Start(address string) error {
 	// management etc...
 	sr := r.PathPrefix("/-").Subrouter()
 	sr.HandleFunc("/healthz", s.health).Methods("GET")
-	sr.HandleFunc("/reload", s.health).Methods("GET")
 
 	// prometheus
 	r.Handle("/metrics", promhttp.Handler()).Methods("GET")

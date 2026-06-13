@@ -178,6 +178,35 @@ func Test_adjustDays(t *testing.T) {
 	}
 }
 
+func Test_calendarDaysBetween(t *testing.T) {
+	// 用有夏令时的时区，覆盖 DST 切换日（2024-03-10 美东春季前移，那天只有 23 小时）
+	ny, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	mk := func(y int, m time.Month, d int) time.Time {
+		return time.Date(y, m, d, 0, 0, 0, 0, ny)
+	}
+
+	tests := []struct {
+		name     string
+		from, to time.Time
+		want     int
+	}{
+		{"same day", mk(2024, 3, 9), mk(2024, 3, 9), 0},
+		{"across spring-forward DST (23h day)", mk(2024, 3, 9), mk(2024, 3, 11), 2},
+		{"single day across DST", mk(2024, 3, 9), mk(2024, 3, 10), 1},
+		{"across fall-back DST (25h day)", mk(2024, 11, 2), mk(2024, 11, 4), 2},
+		{"negative one day", mk(2024, 6, 2), mk(2024, 6, 1), -1},
+		{"to has afternoon time still same calendar day", mk(2024, 6, 1),
+			time.Date(2024, 6, 1, 23, 59, 0, 0, ny), 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, calendarDaysBetween(tt.from, tt.to))
+		})
+	}
+}
+
 func Test_parseDays(t *testing.T) {
 	type args struct {
 		s string

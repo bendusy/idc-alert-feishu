@@ -1,4 +1,4 @@
-{{- /*gotype: github.com/xujiahua/alertmanager-webhook-feishu/model.WebhookMessage*/ -}}
+{{- /*gotype: github.com/bendusy/idc-alert-feishu/model.WebhookMessage*/ -}}
 {
 "msg_type": "interactive",
 "card":
@@ -6,7 +6,7 @@
 "header": {
 "title": {
 "tag": "plain_text",
-"content": "{{.TitlePrefix}}【{{projectCN (index .CommonLabels "project")}}】{{with firstSummary .Alerts.Firing}}{{.}} {{else}}{{if in .GroupLabels "alertname"}}{{.GroupLabels.alertname}} {{end}}{{end}}{{if len .FiringAlerts}}🔥{{len .FiringAlerts}} Firing {{end}}{{if len .ResolvedAlerts}}✅{{len .ResolvedAlerts}} Resolved{{end}}"
+"content": "{{json .TitlePrefix}}【{{json (projectCN (index .CommonLabels "project"))}}】{{with firstSummary .Alerts.Firing}}{{json .}} {{else}}{{if in .GroupLabels "alertname"}}{{json .GroupLabels.alertname}} {{end}}{{end}}{{if len .FiringAlerts}}🔥{{len .FiringAlerts}} Firing {{end}}{{if len .ResolvedAlerts}}✅{{len .ResolvedAlerts}} Resolved{{end}}"
 },
 "template":"{{if len .FiringAlerts}}{{maxSeverityColor .Alerts.Firing}}{{else}}green{{end}}"
 },

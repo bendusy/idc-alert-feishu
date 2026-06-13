@@ -5,15 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/icza/gox/stringsx"
-	"github.com/sirupsen/logrus"
-	"github.com/xujiahua/alertmanager-webhook-feishu/config"
-	"github.com/xujiahua/alertmanager-webhook-feishu/feishu/rotate"
-	"github.com/xujiahua/alertmanager-webhook-feishu/model"
-	"github.com/xujiahua/alertmanager-webhook-feishu/tmpl"
-	"strings"
 	"text/template"
 	"time"
+
+	"github.com/icza/gox/stringsx"
+	amtpl "github.com/prometheus/alertmanager/template"
+	"github.com/sirupsen/logrus"
+
+	"github.com/bendusy/idc-alert-feishu/config"
+	"github.com/bendusy/idc-alert-feishu/feishu/rotate"
+	"github.com/bendusy/idc-alert-feishu/model"
+	"github.com/bendusy/idc-alert-feishu/tmpl"
 )
 
 type Bot struct {
@@ -162,16 +164,20 @@ func mergeMap(left, right map[string]string) map[string]string {
 	return left
 }
 
-// field description may contain double quote, non printable chars
-func fixDescription(s string) string {
-	// feishu fix: clean non printable char
-	s = stringsx.Clean(s)
-	// feishu fix: unescape a string
-	s = fmt.Sprintf("%#v", s)
-	// remove prefix and suffix double quote, means we just unescape inner text
-	s = strings.TrimPrefix(s, "\"")
-	s = strings.TrimSuffix(s, "\"")
-	return s
+// renderAlert 用单条告警模板渲染一条 alert，渲染前清洗不可打印字符，
+// 渲染后整段做 JSON 字符串转义，返回可嵌入外层 JSON 模板 "content": "{{.}}" 的内容。
+// alert 字段来自 Alertmanager（外部可控），不转义会因 " \ 换行等字符破坏 JSON 结构
+// （飞书返回 99991300）。
+func (b Bot) renderAlert(alert amtpl.Alert) (string, error) {
+	// feishu fix: 清除不可打印字符（如 ESC 控制符），避免泄漏给 lark_md 渲染器
+	for k, v := range alert.Annotations {
+		alert.Annotations[k] = stringsx.Clean(v)
+	}
+	var buf bytes.Buffer
+	if err := b.alertTpl.Execute(&buf, alert); err != nil {
+		return "", err
+	}
+	return tmpl.JSONString(buf.String()), nil
 }
 
 func (b Bot) preprocessAlerts(alerts *model.WebhookMessage) error {
@@ -179,29 +185,18 @@ func (b Bot) preprocessAlerts(alerts *model.WebhookMessage) error {
 		return nil
 	}
 
-	// preprocess using alert template
 	for _, alert := range alerts.Alerts.Firing() {
-		var buf bytes.Buffer
-		if _, ok := alert.Annotations["description"]; ok {
-			alert.Annotations["description"] = fixDescription(alert.Annotations["description"])
-		}
-		err := b.alertTpl.Execute(&buf, alert)
+		res, err := b.renderAlert(alert)
 		if err != nil {
 			return err
 		}
-		res := strings.ReplaceAll(buf.String(), "\n", "\\n")
 		alerts.FiringAlerts = append(alerts.FiringAlerts, res)
 	}
 	for _, alert := range alerts.Alerts.Resolved() {
-		var buf bytes.Buffer
-		if _, ok := alert.Annotations["description"]; ok {
-			alert.Annotations["description"] = fixDescription(alert.Annotations["description"])
-		}
-		err := b.alertTpl.Execute(&buf, alert)
+		res, err := b.renderAlert(alert)
 		if err != nil {
 			return err
 		}
-		res := strings.ReplaceAll(buf.String(), "\n", "\\n")
 		alerts.ResolvedAlerts = append(alerts.ResolvedAlerts, res)
 	}
 

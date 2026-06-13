@@ -9,7 +9,7 @@ import (
 
 func TestSdk_BatchGetID(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	app := getAppConf()
+	app := getAppConf(t)
 	sdk := NewSDK(app.ID, app.Secret)
 	resp, err := sdk.TenantAccessToken()
 	require.Nil(t, err)

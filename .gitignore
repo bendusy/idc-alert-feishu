@@ -2,3 +2,4 @@
 config.yml
 dist/
 github.env
+.lto/

@@ -1,4 +1,4 @@
-{{- /*gotype: github.com/xujiahua/alertmanager-webhook-feishu/model.Alert*/ -}}
+{{- /*gotype: github.com/bendusy/idc-alert-feishu/model.Alert*/ -}}
 {{if in .Labels "asset_id"}}**资产**：{{assetLink .Labels.asset_id}}
 {{end -}}
 {{if in .Labels "severity"}}**严重度**：`{{toUpper .Labels.severity}}`

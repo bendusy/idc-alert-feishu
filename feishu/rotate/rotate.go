@@ -90,12 +90,27 @@ func (r MentionRotator) Rotate(t time.Time) []string {
 	if len(r.openIDs) <= 1 {
 		return r.openIDs
 	}
-	days := int(t.Sub(r.baseDate) / time.Hour / 24)
+	days := calendarDaysBetween(r.baseDate, t)
 	days = adjustDays(days, r.cycleDays)
 	index := (bucketIndexEveryN(days, r.cycleDays) - 1) % len(r.openIDs)
 	var res []string
 	res = append(res, r.openIDs[index])
 	return res
+}
+
+// calendarDaysBetween 返回 from 到 to 相差的日历天数（基于 from 的时区的午夜对齐），
+// 避免直接用时长除以 24h —— 那在夏令时切换日（一天 23 或 25 小时）会偏差 ±1 天。
+func calendarDaysBetween(from, to time.Time) int {
+	loc := from.Location()
+	to = to.In(loc)
+	fromDay := time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, loc)
+	toDay := time.Date(to.Year(), to.Month(), to.Day(), 0, 0, 0, 0, loc)
+	// 两个午夜之间的差值，按符号四舍五入到整天，吸收 DST 带来的 ±1h
+	diff := toDay.Sub(fromDay)
+	if diff >= 0 {
+		return int((diff + 12*time.Hour) / (24 * time.Hour))
+	}
+	return int((diff - 12*time.Hour) / (24 * time.Hour))
 }
 
 func bucketIndexEveryN(v, bucketSize int) int {

@@ -1,7 +1,9 @@
 package tmpl
 
 import (
+	"bytes"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	amtmpl "github.com/prometheus/alertmanager/template"
@@ -12,6 +14,21 @@ import (
 	"text/template"
 	"time"
 )
+
+// JSONString 把任意字符串转义成可安全嵌入 JSON 字符串值位置的内容
+// （不含首尾引号）。用于防止 alert 字段里的 " \ 换行等字符破坏发往飞书的 JSON。
+// 关闭 HTML 转义，避免 URL 里的 & < > 被转成 \u00xx。
+func JSONString(s string) string {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(s); err != nil {
+		return s
+	}
+	b := buf.Bytes()
+	b = b[:len(b)-1] // 去掉 Encode 追加的末尾 '\n'
+	return string(b[1 : len(b)-1])
+}
 
 //go:embed templates/*
 var fs embed.FS
@@ -122,6 +139,10 @@ func init() {
 			return fmt.Sprintf("[%s](%s)", s, s)
 		},
 		"displayKV": func(k, v string) string {
+			// 转义后再拼接，避免 meta value（来自 query string，外部可控）里的
+			// " \ 等字符破坏外层 JSON 结构
+			k = JSONString(k)
+			v = JSONString(v)
 			_, err := url.ParseRequestURI(v)
 			if err != nil {
 				return fmt.Sprintf("%s:%s", k, v)
@@ -129,6 +150,8 @@ func init() {
 			return fmt.Sprintf("[%s](%s)", k, v)
 		},
 		"contains": strings.Contains,
+		// json: 把外部字段转义后安全嵌入 JSON 字符串值位置（防注入/破坏结构）
+		"json": JSONString,
 		// IDC: severity → 飞书卡片 header 颜色（单值版，保留兼容现有模板）
 		"severityColor": severityToColor,
 		// IDC: project → 中文显示名（卡片标题直观展示）

@@ -1,13 +1,15 @@
 package tmpl
 
 import (
-	"github.com/prometheus/alertmanager/template"
-	"github.com/stretchr/testify/require"
-	"github.com/xujiahua/alertmanager-webhook-feishu/model"
 	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/alertmanager/template"
+	"github.com/stretchr/testify/require"
+
+	"github.com/bendusy/idc-alert-feishu/model"
 )
 
 func TestFeishuCard(t *testing.T) {
@@ -71,6 +73,78 @@ func TestIDCAlertTemplate(t *testing.T) {
 		require.Equal(t, "yellow", fn("warning"))
 		require.Equal(t, "grey", fn("info"))
 		require.Equal(t, "blue", fn("unknown"))
+	})
+}
+
+func TestJSONString(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"plain", "hello", "hello"},
+		{"empty", "", ""},
+		{"double quote", `a"b`, `a\"b`},
+		{"backslash", `a\b`, `a\\b`},
+		{"newline", "a\nb", `a\nb`},
+		{"chinese kept", "重启", "重启"},
+		{"ampersand not html escaped", "a&b<c>", "a&b<c>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, JSONString(tt.in))
+		})
+	}
+}
+
+// TestIDCHeaderColor 锁死 BUG3：header 着色用 maxSeverityColor 遍历 firing alert
+// 取最高 severity，不依赖 Alertmanager 是否把 severity 放进 group_by。
+func TestIDCHeaderColor(t *testing.T) {
+	et := embedTemplates["idc.tmpl"]
+	require.NotNil(t, et)
+
+	// 用真实 firing alert（带 severity label）渲染，FiringAlerts 非空触发着色分支
+	render := func(firing template.Alerts) string {
+		var fa []string
+		for range firing {
+			fa = append(fa, "x")
+		}
+		buf := &strings.Builder{}
+		require.NoError(t, et.Execute(buf, model.WebhookMessage{
+			Data:         template.Data{Alerts: firing},
+			FiringAlerts: fa,
+		}))
+		return buf.String()
+	}
+
+	t.Run("单条 critical → red", func(t *testing.T) {
+		out := render(template.Alerts{
+			{Status: "firing", Labels: map[string]string{"severity": "critical"}},
+		})
+		require.Contains(t, out, `"template":"red"`)
+	})
+
+	t.Run("一组混合 severity 取最高（warning+critical → red）", func(t *testing.T) {
+		out := render(template.Alerts{
+			{Status: "firing", Labels: map[string]string{"severity": "warning"}},
+			{Status: "firing", Labels: map[string]string{"severity": "critical"}},
+		})
+		require.Contains(t, out, `"template":"red"`)
+	})
+
+	t.Run("error → orange，不依赖 GroupLabels", func(t *testing.T) {
+		out := render(template.Alerts{
+			{Status: "firing", Labels: map[string]string{"severity": "error"}},
+		})
+		require.Contains(t, out, `"template":"orange"`)
+	})
+
+	t.Run("无 firing → green", func(t *testing.T) {
+		buf := &strings.Builder{}
+		require.NoError(t, et.Execute(buf, model.WebhookMessage{
+			Data: template.Data{GroupLabels: map[string]string{"alertname": "X"}},
+		}))
+		require.Contains(t, buf.String(), `"template":"green"`)
 	})
 }
 

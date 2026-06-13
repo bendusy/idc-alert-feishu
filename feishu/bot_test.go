@@ -2,42 +2,45 @@ package feishu
 
 import (
 	"encoding/json"
+	"reflect"
+	"testing"
+	"time"
+
 	"github.com/davecgh/go-spew/spew"
 	"github.com/prometheus/alertmanager/template"
 	"github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
-	"github.com/xujiahua/alertmanager-webhook-feishu/config"
-	"github.com/xujiahua/alertmanager-webhook-feishu/model"
-	"reflect"
-	"testing"
-	"time"
+
+	"github.com/bendusy/idc-alert-feishu/config"
+	"github.com/bendusy/idc-alert-feishu/model"
 )
 
-func getConf() *config.Config {
+func getConf(t *testing.T) *config.Config {
 	conf, err := config.Load("../config.yml")
 	if err != nil {
-		panic(err)
+		t.Skipf("skip: requires local ../config.yml with real feishu credentials: %v", err)
 	}
 	return conf
 }
 
-func getBotConf() *config.Bot {
-	for _, bot := range getConf().Bots {
+func getBotConf(t *testing.T) *config.Bot {
+	for _, bot := range getConf(t).Bots {
 		if bot.Mention != nil {
 			continue
 		}
 		return bot
 	}
-	panic("expect at least one")
+	t.Skip("skip: expect at least one bot without mention in local config")
+	return nil
 }
 
-func getAppConf() *config.App {
-	return getConf().App
+func getAppConf(t *testing.T) *config.App {
+	return getConf(t).App
 }
 
 func TestBot_Send(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	bot, err := New(getBotConf(), nil)
+	bot, err := New(getBotConf(t), nil)
 	require.Nil(t, err)
 	bot.openIDs = []string{"ou_177f84317c6ee52630edf335d5f8a6fc", "ou_177f84317c6ee52630edf335d5f8a6fc"}
 	bot.titlePrefix = "[SHANGHAI]"

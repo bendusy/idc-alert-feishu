@@ -21,6 +21,10 @@
 3. 部署设置 `HANDBOOK_BASE_URL=https://your-handbook.example.com`；
 4. 飞书收到的卡片 header 会按 severity 着色，正文里 `asset_id` 一键跳 handbook。
 
+> **header 着色的前提**：着色取 `CommonLabels.severity`（同一组告警 severity 相同时自动出现），回退到 `GroupLabels.severity`。
+> 只要每条告警都带 `severity` label（步骤 2 已要求），着色即生效，无需特意把 `severity` 放进 Alertmanager 的 `group_by`。
+> 若一组里混杂了不同 severity 且未按 severity 分组，则 `CommonLabels` 不含 severity，header 退化为蓝色。
+
 ---
 
 ## 自定义机器人
@@ -75,10 +79,6 @@ Global Flags:
 ```
 
 
-
-### helm chart
-
-见 [helm/charts/alertmanager-webhook-feishu](helm/charts/alertmanager-webhook-feishu)
 
 ## 功能列表
 

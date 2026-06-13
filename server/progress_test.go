@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/bendusy/idc-alert-feishu/feishu"
+	"github.com/bendusy/idc-alert-feishu/model"
 	"github.com/gorilla/mux"
-	"github.com/xujiahua/alertmanager-webhook-feishu/feishu"
-	"github.com/xujiahua/alertmanager-webhook-feishu/model"
 )
 
 // captureBot 捕获最后一次 Send 的 message，便于断言

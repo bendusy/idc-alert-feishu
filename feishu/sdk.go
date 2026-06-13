@@ -11,15 +11,22 @@ import (
 	"github.com/sirupsen/logrus"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
+	"sync"
 	"time"
 )
+
+// maxTokenRefreshRetries 限制初始 token 获取的重试次数，避免飞书长期不可达时无限重试。
+const maxTokenRefreshRetries = 5
 
 type Sdk struct {
 	appID     string
 	appSecret string
-	token     string
 	client    http.Client
+
+	mu    sync.RWMutex
+	token string
 }
 
 func NewSDK(appID string, appSecret string) *Sdk {
@@ -34,6 +41,18 @@ func NewSDK(appID string, appSecret string) *Sdk {
 	}
 
 	return s
+}
+
+func (s *Sdk) getToken() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.token
+}
+
+func (s *Sdk) setToken(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.token = token
 }
 
 type batchGetIDResponse struct {
@@ -54,7 +73,7 @@ type batchGetIDResponse struct {
 }
 
 // BatchGetID https://open.feishu.cn/document/ukTMukTMukTM/uUzMyUjL1MjM14SNzITN
-func (s Sdk) BatchGetID(emails []string) (map[string]string, error) {
+func (s *Sdk) BatchGetID(emails []string) (map[string]string, error) {
 	if len(emails) == 0 {
 		return nil, errors.New("at least 1 email")
 	}
@@ -62,19 +81,19 @@ func (s Sdk) BatchGetID(emails []string) (map[string]string, error) {
 		return nil, errors.New("at most 50 emails")
 	}
 
-	api := "https://open.feishu.cn/open-apis/user/v1/batch_get_id?"
+	params := url.Values{}
 	for _, email := range emails {
-		api += "emails=" + email + "&"
+		params.Add("emails", email)
 	}
-	api = api[:len(api)-1]
+	api := "https://open.feishu.cn/open-apis/user/v1/batch_get_id?" + params.Encode()
 	var response batchGetIDResponse
-	err := s.get(api, s.token, &response)
+	err := s.get(api, s.getToken(), &response)
 	if err != nil {
 		return nil, err
 	}
 
 	if response.Code != 0 {
-		return nil, errors.New(fmt.Sprintf("code: %d, err: %s", response.Code, response.Msg))
+		return nil, fmt.Errorf("code: %d, err: %s", response.Code, response.Msg)
 	}
 
 	res := make(map[string]string)
@@ -99,19 +118,19 @@ type tokenResponse struct {
 }
 
 // TenantAccessToken https://open.feishu.cn/document/ukTMukTMukTM/uIjNz4iM2MjLyYzM
-func (s Sdk) TenantAccessToken() (*tokenResponse, error) {
+func (s *Sdk) TenantAccessToken() (*tokenResponse, error) {
 	request := tokenRequest{
 		AppID:     s.appID,
 		AppSecret: s.appSecret,
 	}
 	var response tokenResponse
-	err := s.post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/", s.token, request, &response)
+	err := s.post("https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal/", s.getToken(), request, &response)
 	if err != nil {
 		return nil, err
 	}
 
 	if response.Code != 0 {
-		return nil, errors.New(fmt.Sprintf("code: %d, err: %s", response.Code, response.Msg))
+		return nil, fmt.Errorf("code: %d, err: %s", response.Code, response.Msg)
 	}
 
 	return &response, nil
@@ -119,16 +138,19 @@ func (s Sdk) TenantAccessToken() (*tokenResponse, error) {
 
 // wired response:
 // response of success
-//{
-//    "Extra": null,
-//    "StatusCode": 0,
-//    "StatusMessage": "success"
-//}
+//
+//	{
+//	   "Extra": null,
+//	   "StatusCode": 0,
+//	   "StatusMessage": "success"
+//	}
+//
 // response of failure
-//{
-//    "code": 99991300,
-//    "msg": "invalid request body: not json, invalid character '\\n' in string literal"
-//}
+//
+//	{
+//	   "code": 99991300,
+//	   "msg": "invalid request body: not json, invalid character '\\n' in string literal"
+//	}
 type webhookV2Response struct {
 	StatusCode    int    `json:"StatusCode"`
 	StatusMessage string `json:"StatusMessage"`
@@ -166,7 +188,7 @@ func injectSign(body io.Reader, secret string) (io.Reader, error) {
 	return bytes.NewReader(signed), nil
 }
 
-func (s Sdk) WebhookV2(webhook string, body io.Reader, sign string) error {
+func (s *Sdk) WebhookV2(webhook string, body io.Reader, sign string) error {
 	if sign != "" {
 		signed, err := injectSign(body, sign)
 		if err != nil {
@@ -195,21 +217,21 @@ func (s Sdk) WebhookV2(webhook string, body io.Reader, sign string) error {
 	logrus.Debug(resp)
 
 	if resp.Code != 0 {
-		return errors.New(fmt.Sprintf("code: %d, err: %s", resp.Code, resp.Msg))
+		return fmt.Errorf("code: %d, err: %s", resp.Code, resp.Msg)
 	}
 
 	return nil
 }
 
-func (s Sdk) get(url string, auth string, responseBody interface{}) error {
+func (s *Sdk) get(url string, auth string, responseBody interface{}) error {
 	return s.call("GET", url, auth, nil, responseBody)
 }
 
-func (s Sdk) post(url string, auth string, requestBody, responseBody interface{}) error {
+func (s *Sdk) post(url string, auth string, requestBody, responseBody interface{}) error {
 	return s.call("POST", url, auth, requestBody, responseBody)
 }
 
-func (s Sdk) call(method string, url string, auth string, requestBody, responseBody interface{}) error {
+func (s *Sdk) call(method string, url string, auth string, requestBody, responseBody interface{}) error {
 	logrus.Debugf("%s %s with %v", method, url, requestBody)
 	var body io.Reader
 	if requestBody != nil {
@@ -246,16 +268,23 @@ func (s Sdk) call(method string, url string, auth string, requestBody, responseB
 }
 
 func (s *Sdk) refreshToken() {
-	response, err := s.TenantAccessToken()
-	if err != nil {
-		logrus.Errorf("refresh token failed, %v", err)
-
-		// sleep and try again
+	// 用循环重试代替递归，避免飞书长期不可达时 goroutine 栈无限增长
+	var response *tokenResponse
+	for attempt := 1; ; attempt++ {
+		var err error
+		response, err = s.TenantAccessToken()
+		if err == nil {
+			break
+		}
+		logrus.Errorf("refresh token failed (attempt %d/%d), %v", attempt, maxTokenRefreshRetries, err)
+		if attempt >= maxTokenRefreshRetries {
+			logrus.Errorf("refresh token giving up after %d attempts", maxTokenRefreshRetries)
+			return
+		}
 		time.Sleep(time.Second * 1)
-		s.refreshToken()
-		return
 	}
-	s.token = response.TenantAccessToken
+
+	s.setToken(response.TenantAccessToken)
 
 	// https://open.feishu.cn/document/ukTMukTMukTM/uIjNz4iM2MjLyYzM
 	// Token 有效期为 2 小时，在此期间调用该接口 token 不会改变。当 token 有效期小于 30 分的时候，再次请求获取 token 的时候，会生成一个新的 token，与此同时老的 token 依然有效。

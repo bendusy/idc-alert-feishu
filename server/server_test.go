@@ -4,15 +4,17 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/gorilla/mux"
-	"github.com/prometheus/alertmanager/template"
-	"github.com/stretchr/testify/require"
-	"github.com/xujiahua/alertmanager-webhook-feishu/feishu"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/gorilla/mux"
+	"github.com/prometheus/alertmanager/template"
+	"github.com/stretchr/testify/require"
+
+	"github.com/bendusy/idc-alert-feishu/feishu"
 )
 
 func TestServer_hook(t *testing.T) {
@@ -47,6 +49,7 @@ func TestServer_hook(t *testing.T) {
 
 // test real server
 func TestServer(t *testing.T) {
+	t.Skip("skip: manual integration test, requires a running server on localhost:8000")
 	tt := []struct {
 		group      string
 		shouldPass bool

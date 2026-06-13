@@ -8,7 +8,7 @@ import (
 
 func TestEmailHelper_Lookup(t *testing.T) {
 	logrus.SetLevel(logrus.DebugLevel)
-	helper, err := NewEmailHelper(getAppConf())
+	helper, err := NewEmailHelper(getAppConf(t))
 	require.Nil(t, err)
 	openIDs, err := helper.Lookup([]string{"john.xu@cardinfolink.com", "tommy.shang@cardinfolink.com"})
 	require.Nil(t, err)

@@ -2,9 +2,11 @@ package feishu
 
 import (
 	"errors"
-	"github.com/sirupsen/logrus"
-	"github.com/xujiahua/alertmanager-webhook-feishu/config"
 	"sync"
+
+	"github.com/sirupsen/logrus"
+
+	"github.com/bendusy/idc-alert-feishu/config"
 )
 
 type EmailHelper struct {
