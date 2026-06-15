@@ -25,6 +25,26 @@
 > 只要每条告警都带 `severity` label（步骤 2 已要求），着色即生效，无需特意把 `severity` 放进 Alertmanager 的 `group_by`。
 > 若一组里混杂了不同 severity 且未按 severity 分组，则 `CommonLabels` 不含 severity，header 退化为蓝色。
 
+### 进度上报通道
+
+本 fork 额外提供 `POST /progress/<group>`，供长任务脚本发送低噪音进度卡：
+
+```bash
+curl -XPOST http://127.0.0.1:18930/progress/idc-infra \
+  -H 'Content-Type: application/json' \
+  -d '{"summary":"📦 sdf1 抽盘 · 剩 2.9TiB · 18.2MiB/s","detail":"ETA: 1d2h"}'
+```
+
+服务端会包装为 `severity=info` 的灰色卡片，不 @ 人；未知 group、空 summary 和限流会返回错误。契约见 [docs/progress-endpoint.md](docs/progress-endpoint.md)。
+
+长任务客户端见 [scripts/task-progress](scripts/task-progress) 与 [docs/task-progress-client.md](docs/task-progress-client.md)：
+
+```bash
+scripts/task-progress send --group idc-infra --summary "进度" --detail "详情"
+scripts/task-progress watch --probe /etc/task-progress.d/sdf1.conf
+scripts/task-progress register /etc/task-progress.d/sdf1.conf
+```
+
 ---
 
 ## 自定义机器人
@@ -151,4 +171,3 @@ bots:
     	custom_path: /path/to/custom/path
 
 ```
-

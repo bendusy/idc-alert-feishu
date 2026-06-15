@@ -1,0 +1,506 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DEFAULT_ENDPOINT="http://127.0.0.1:18930"
+DEFAULT_STATE_DIR="/var/lib/task-progress"
+DEFAULT_CRON_DIR="/etc/cron.d"
+
+usage() {
+	cat <<'EOF'
+Usage:
+  task-progress send --group GROUP --summary TEXT [--detail TEXT] [--endpoint URL]
+  task-progress watch --probe FILE [--endpoint URL] [--state-dir DIR] [--cron-dir DIR] [--force]
+  task-progress register PROBE [--endpoint URL] [--cron-dir DIR]
+  task-progress unregister PROBE [--cron-dir DIR]
+
+Probe files are shell snippets defining GROUP, TITLE, remaining_bytes(), and is_done().
+EOF
+}
+
+die() {
+	printf 'task-progress: %s\n' "$*" >&2
+	exit 1
+}
+
+need_cmd() {
+	command -v "$1" >/dev/null 2>&1 || die "missing command: $1"
+}
+
+have_func() {
+	declare -F "$1" >/dev/null 2>&1
+}
+
+json_escape() {
+	if command -v python3 >/dev/null 2>&1; then
+		python3 -c 'import json,sys; print(json.dumps(sys.stdin.read(), ensure_ascii=False)[1:-1])'
+		return
+	fi
+	awk '
+		BEGIN { ORS = "" }
+		{
+			gsub(/\\/, "\\\\")
+			gsub(/"/, "\\\"")
+			if (NR > 1) printf "\\n"
+			printf "%s", $0
+		}'
+}
+
+json_payload() {
+	local summary=$1
+	local detail=$2
+	local summary_json detail_json
+	summary_json=$(printf '%s' "$summary" | json_escape)
+	detail_json=$(printf '%s' "$detail" | json_escape)
+	printf '{"summary":"%s","detail":"%s"}' "$summary_json" "$detail_json"
+}
+
+send_progress() {
+	local endpoint=$1
+	local group=$2
+	local summary=$3
+	local detail=$4
+	local attempts=${TASK_PROGRESS_RETRIES:-3}
+	local delay=${TASK_PROGRESS_SLEEP_SECONDS:-1}
+	local attempt=1
+	local body_file status payload
+
+	need_cmd curl
+	endpoint=${endpoint%/}
+	payload=$(json_payload "$summary" "$detail")
+	body_file=$(mktemp "${TMPDIR:-/tmp}/task-progress.XXXXXX")
+
+	while [ "$attempt" -le "$attempts" ]; do
+		status=$(
+			curl --silent --show-error \
+				--output "$body_file" \
+				--write-out '%{http_code}' \
+				--connect-timeout 5 \
+				--max-time 15 \
+				--header 'Content-Type: application/json' \
+				--request POST \
+				--data "$payload" \
+				"$endpoint/progress/$group" || printf '000'
+		)
+		case "$status" in
+			2*)
+				rm -f "$body_file"
+				return 0
+				;;
+		esac
+		if [ "$attempt" -ge "$attempts" ]; then
+			printf 'send failed: http=%s endpoint=%s group=%s\n' "$status" "$endpoint" "$group" >&2
+			if [ -s "$body_file" ]; then
+				cat "$body_file" >&2
+				printf '\n' >&2
+			fi
+			rm -f "$body_file"
+			return 1
+		fi
+		sleep "$delay"
+		delay=$((delay * 2))
+		attempt=$((attempt + 1))
+	done
+}
+
+size_to_bytes() {
+	awk -v raw="$1" '
+		BEGIN {
+			gsub(/^[ \t]+|[ \t]+$/, "", raw)
+			n = raw + 0
+			u = raw
+			sub(/^[0-9.]+[ \t]*/, "", u)
+			gsub(/[bB]$/, "", u)
+			u = toupper(u)
+			mul = 1
+			if (u == "K" || u == "KB" || u == "KI" || u == "KIB") mul = 1024
+			else if (u == "M" || u == "MB" || u == "MI" || u == "MIB") mul = 1024 ^ 2
+			else if (u == "G" || u == "GB" || u == "GI" || u == "GIB") mul = 1024 ^ 3
+			else if (u == "T" || u == "TB" || u == "TI" || u == "TIB") mul = 1024 ^ 4
+			else if (u == "P" || u == "PB" || u == "PI" || u == "PIB") mul = 1024 ^ 5
+			printf "%.0f\n", n * mul
+		}'
+}
+
+human_bytes() {
+	awk -v n="$1" '
+		BEGIN {
+			split("B KiB MiB GiB TiB PiB", units, " ")
+			i = 1
+			while (n >= 1024 && i < 6) {
+				n = n / 1024
+				i++
+			}
+			if (i == 1) printf "%.0fB\n", n
+			else printf "%.1f%s\n", n, units[i]
+		}'
+}
+
+human_rate() {
+	local rate=${1:-0}
+	if [ "$rate" -le 0 ]; then
+		printf 'baseline'
+		return
+	fi
+	printf '%s/s' "$(human_bytes "$rate")"
+}
+
+human_duration() {
+	local sec=${1:-0}
+	local days hours mins
+	if [ "$sec" -le 0 ]; then
+		printf 'unknown'
+		return
+	fi
+	days=$((sec / 86400))
+	sec=$((sec % 86400))
+	hours=$((sec / 3600))
+	sec=$((sec % 3600))
+	mins=$((sec / 60))
+	sec=$((sec % 60))
+	if [ "$days" -gt 0 ]; then
+		printf '%dd%dh' "$days" "$hours"
+	elif [ "$hours" -gt 0 ]; then
+		printf '%dh%dm' "$hours" "$mins"
+	elif [ "$mins" -gt 0 ]; then
+		printf '%dm%ds' "$mins" "$sec"
+	else
+		printf '%ds' "$sec"
+	fi
+}
+
+calc_rate_bps() {
+	local prev_remaining=$1
+	local current_remaining=$2
+	local prev_ts=$3
+	local current_ts=$4
+	local delta elapsed rate
+	if [ -z "$prev_remaining" ] || [ -z "$prev_ts" ]; then
+		printf '0\n'
+		return
+	fi
+	elapsed=$((current_ts - prev_ts))
+	delta=$((prev_remaining - current_remaining))
+	if [ "$elapsed" -le 0 ] || [ "$delta" -le 0 ]; then
+		printf '0\n'
+		return
+	fi
+	rate=$((delta / elapsed))
+	if [ "$rate" -lt 1 ]; then
+		rate=1
+	fi
+	printf '%s\n' "$rate"
+}
+
+calc_eta_seconds() {
+	local remaining=$1
+	local rate=$2
+	if [ "$rate" -le 0 ]; then
+		printf '\n'
+		return
+	fi
+	printf '%s\n' "$(((remaining + rate - 1) / rate))"
+}
+
+adaptive_every() {
+	local eta=${1:-}
+	if [ -z "$eta" ] || [ "$eta" -le 0 ]; then
+		printf '1\n'
+	elif [ "$eta" -le 7200 ]; then
+		printf '1\n'
+	elif [ "$eta" -le 21600 ]; then
+		printf '2\n'
+	else
+		printf '4\n'
+	fi
+}
+
+emit_policy() {
+	local eta=${1:-}
+	local skip=${2:-0}
+	local every
+	every=$(adaptive_every "$eta")
+	if [ "$skip" -ge $((every - 1)) ]; then
+		printf 'send 0 %s\n' "$every"
+	else
+		printf 'skip %s %s\n' "$((skip + 1))" "$every"
+	fi
+}
+
+dir_bytes() {
+	local dir=$1
+	if [ ! -d "$dir" ]; then
+		printf '0\n'
+		return
+	fi
+	find "$dir" -type f -exec sh -c 'for file do wc -c < "$file"; done' sh {} + 2>/dev/null \
+		| awk '{sum += $1} END {print sum + 0}'
+}
+
+safe_name() {
+	local base
+	base=$(basename "$1")
+	base=${base%.conf}
+	printf '%s' "$base" | sed 's/[^A-Za-z0-9_.-]/_/g'
+}
+
+shell_quote() {
+	printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+self_path() {
+	local src dir
+	src=${BASH_SOURCE[0]}
+	dir=$(cd "$(dirname "$src")" && pwd)
+	printf '%s/%s\n' "$dir" "$(basename "$src")"
+}
+
+load_probe() {
+	local probe=$1
+	[ -r "$probe" ] || die "probe not readable: $probe"
+	set +u
+	. "$probe"
+	set -u
+	[ -n "${GROUP:-}" ] || die "probe missing GROUP: $probe"
+	[ -n "${TITLE:-}" ] || die "probe missing TITLE: $probe"
+	have_func remaining_bytes || die "probe missing remaining_bytes(): $probe"
+	have_func is_done || die "probe missing is_done(): $probe"
+}
+
+read_state() {
+	local state_file=$1
+	PREV_REMAINING=
+	PREV_TS=
+	SKIP_COUNTER=0
+	if [ -r "$state_file" ]; then
+		IFS='|' read -r PREV_REMAINING PREV_TS SKIP_COUNTER _ < "$state_file" || true
+	fi
+	case "${SKIP_COUNTER:-0}" in
+		''|*[!0-9]*) SKIP_COUNTER=0 ;;
+	esac
+}
+
+write_state() {
+	local state_file=$1
+	local remaining=$2
+	local ts=$3
+	local skip=$4
+	local tmp
+	mkdir -p "$(dirname "$state_file")"
+	tmp=$(mktemp "${state_file}.XXXXXX")
+	printf '%s|%s|%s\n' "$remaining" "$ts" "$skip" > "$tmp"
+	mv "$tmp" "$state_file"
+}
+
+health_text() {
+	if ! have_func is_healthy; then
+		printf '未提供'
+		return
+	fi
+	if is_healthy; then
+		printf '🟢 healthy'
+	else
+		printf '🔴 unhealthy'
+	fi
+}
+
+build_detail() {
+	local remaining=$1
+	local prev_remaining=$2
+	local rate=$3
+	local eta=$4
+	local every=$5
+	local extra=
+	local prev_text="none"
+	local eta_text="baseline"
+	if [ -n "$prev_remaining" ]; then
+		prev_text=$(human_bytes "$prev_remaining")
+	fi
+	if [ -n "$eta" ]; then
+		eta_text=$(human_duration "$eta")
+	fi
+	if have_func extra_detail; then
+		extra=$(extra_detail 2>/dev/null || true)
+	fi
+	cat <<EOF
+当前剩余: $(human_bytes "$remaining")
+上次剩余: $prev_text
+迁移速率: $(human_rate "$rate")
+ETA: $eta_text
+进程: $(health_text)
+发送节奏: 每 $every 个采样周期
+$extra
+EOF
+}
+
+complete_detail() {
+	local extra=
+	if have_func completion_detail; then
+		extra=$(completion_detail 2>/dev/null || true)
+	fi
+	if [ -n "$extra" ]; then
+		printf '%s\n' "$extra"
+	else
+		printf '任务已完成，已注销 cron。\n'
+	fi
+}
+
+unregister_probe() {
+	local probe=$1
+	local cron_dir=$2
+	local name cron_file
+	name=$(safe_name "$probe")
+	cron_file="$cron_dir/task-progress-$name"
+	rm -f "$cron_file"
+}
+
+cmd_send() {
+	local endpoint=$DEFAULT_ENDPOINT
+	local group=
+	local summary=
+	local detail=
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--endpoint) endpoint=$2; shift 2 ;;
+			--group) group=$2; shift 2 ;;
+			--summary) summary=$2; shift 2 ;;
+			--detail) detail=$2; shift 2 ;;
+			-h|--help) usage; exit 0 ;;
+			*) die "unknown send option: $1" ;;
+		esac
+	done
+	[ -n "$group" ] || die "send requires --group"
+	[ -n "$summary" ] || die "send requires --summary"
+	send_progress "$endpoint" "$group" "$summary" "$detail"
+}
+
+cmd_watch() {
+	local endpoint=$DEFAULT_ENDPOINT
+	local state_dir=$DEFAULT_STATE_DIR
+	local cron_dir=$DEFAULT_CRON_DIR
+	local probe=
+	local force=0
+	local name state_file now remaining rate eta policy action next_skip every summary detail
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--endpoint) endpoint=$2; shift 2 ;;
+			--probe) probe=$2; shift 2 ;;
+			--state-dir) state_dir=$2; shift 2 ;;
+			--cron-dir) cron_dir=$2; shift 2 ;;
+			--force) force=1; shift ;;
+			-h|--help) usage; exit 0 ;;
+			*) die "unknown watch option: $1" ;;
+		esac
+	done
+	[ -n "$probe" ] || die "watch requires --probe"
+	load_probe "$probe"
+	name=$(safe_name "$probe")
+	state_file="$state_dir/$name.last"
+
+	if is_done; then
+		send_progress "$endpoint" "$GROUP" "✅ $TITLE 完成" "$(complete_detail)"
+		unregister_probe "$probe" "$cron_dir"
+		rm -f "$state_file"
+		return
+	fi
+
+	if ! remaining=$(remaining_bytes); then
+		die "remaining_bytes failed: $probe"
+	fi
+	remaining=$(printf '%s' "$remaining" | tr -d '[:space:]')
+	case "$remaining" in
+		''|*[!0-9]*) die "remaining_bytes must output integer bytes, got: $remaining" ;;
+	esac
+
+	now=${TASK_PROGRESS_NOW:-$(date +%s)}
+	read_state "$state_file"
+	rate=$(calc_rate_bps "$PREV_REMAINING" "$remaining" "$PREV_TS" "$now")
+	eta=$(calc_eta_seconds "$remaining" "$rate")
+	policy=$(emit_policy "$eta" "$SKIP_COUNTER")
+	set -- $policy
+	action=$1
+	next_skip=$2
+	every=$3
+	if [ "$force" -eq 1 ]; then
+		action=send
+		next_skip=0
+	fi
+
+	if [ "$action" = "send" ]; then
+		if [ "$rate" -gt 0 ]; then
+			summary="📦 $TITLE · 剩 $(human_bytes "$remaining") · $(human_rate "$rate")"
+		else
+			summary="📦 $TITLE · 剩 $(human_bytes "$remaining") · 基线建立中"
+		fi
+		detail=$(build_detail "$remaining" "$PREV_REMAINING" "$rate" "$eta" "$every")
+		send_progress "$endpoint" "$GROUP" "$summary" "$detail"
+	fi
+	write_state "$state_file" "$remaining" "$now" "$next_skip"
+}
+
+cmd_register() {
+	local endpoint=$DEFAULT_ENDPOINT
+	local cron_dir=$DEFAULT_CRON_DIR
+	local probe=
+	local name cron_file script_path probe_path
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--endpoint) endpoint=$2; shift 2 ;;
+			--cron-dir) cron_dir=$2; shift 2 ;;
+			-h|--help) usage; exit 0 ;;
+			-*) die "unknown register option: $1" ;;
+			*) probe=$1; shift ;;
+		esac
+	done
+	[ -n "$probe" ] || die "register requires PROBE"
+	[ -r "$probe" ] || die "probe not readable: $probe"
+	name=$(safe_name "$probe")
+	cron_file="$cron_dir/task-progress-$name"
+	script_path=$(self_path)
+	probe_path=$(cd "$(dirname "$probe")" && pwd)/$(basename "$probe")
+	mkdir -p "$cron_dir"
+	cat > "$cron_file" <<EOF
+SHELL=/bin/sh
+PATH=/usr/bin:/bin
+*/30 * * * * root $(shell_quote "$script_path") watch --probe $(shell_quote "$probe_path") --endpoint $(shell_quote "$endpoint") >> /var/log/task-progress-$name.log 2>&1
+EOF
+	chmod 0644 "$cron_file"
+	printf 'registered: %s\n' "$cron_file"
+}
+
+cmd_unregister() {
+	local cron_dir=$DEFAULT_CRON_DIR
+	local probe=
+	while [ "$#" -gt 0 ]; do
+		case "$1" in
+			--cron-dir) cron_dir=$2; shift 2 ;;
+			-h|--help) usage; exit 0 ;;
+			-*) die "unknown unregister option: $1" ;;
+			*) probe=$1; shift ;;
+		esac
+	done
+	[ -n "$probe" ] || die "unregister requires PROBE"
+	unregister_probe "$probe" "$cron_dir"
+}
+
+main() {
+	local cmd=${1:-}
+	if [ -z "$cmd" ]; then
+		usage
+		exit 2
+	fi
+	shift
+	case "$cmd" in
+		send) cmd_send "$@" ;;
+		watch) cmd_watch "$@" ;;
+		register) cmd_register "$@" ;;
+		unregister) cmd_unregister "$@" ;;
+		-h|--help) usage ;;
+		*) die "unknown command: $cmd" ;;
+	esac
+}
+
+if [ "${TASK_PROGRESS_SOURCE_ONLY:-0}" = "1" ]; then
+	return 0 2>/dev/null || exit 0
+fi
+
+main "$@"
