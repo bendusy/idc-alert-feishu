@@ -13,3 +13,8 @@ func (f FakeBot) Send(message *model.WebhookMessage) error {
 	spew.Dump(message)
 	return nil
 }
+
+func (f FakeBot) SendProgress(message *model.ProgressMessage) error {
+	spew.Dump(message)
+	return nil
+}

@@ -1,0 +1,52 @@
+{{- /*gotype: github.com/bendusy/idc-alert-feishu/model.ProgressMessage*/ -}}
+{{- /*
+  出站推送专属卡片（progress/bell/question 三态），脱离告警模板。
+  所有外部字段（Summary/Detail/Project/Cwd/Questions 文本）由 Bot.SendProgress
+  在传入前经 tmpl.JSONString 转义，故此处直接输出，不再二次转义。
+*/ -}}
+{
+"msg_type": "interactive",
+"card": {
+{{- if eq .Kind "question" }}
+"header": {
+"title": { "tag": "plain_text", "content": "❓ Claude Code 在等你选 · 【{{.Project}}】" },
+"template": "{{if .Color}}{{.Color}}{{else}}orange{{end}}"
+},
+"elements": [
+{{- range $i, $q := .Questions }}
+{{if $i}}{ "tag": "hr" },{{end}}
+{
+"tag": "div",
+"text": { "tag": "lark_md", "content": "📋 **问题 {{$q.Index}}**：{{$q.Question}}\n\n{{$q.OptionsMarkdown}}" }
+},
+{{- end }}
+{
+"tag": "note",
+"elements": [ { "tag": "lark_md", "content": "🕒 {{.TimeCN}} | 📂 `{{.Cwd}}`{{if .RequestID}} | 🆔 {{.RequestID}}{{end}}" } ]
+}
+]
+{{- else }}
+"header": {
+"title": { "tag": "plain_text", "content": "{{if .Project}}{{.Summary}}{{else}}📊 进度 · 【{{.GroupCN}}】{{end}}" },
+"template": "{{if .Color}}{{.Color}}{{else}}grey{{end}}"
+},
+"elements": [
+{
+"tag": "div",
+"text": { "tag": "lark_md", "content": "{{.Summary}}" }
+}
+{{- if .Detail }},
+{ "tag": "hr" },
+{
+"tag": "div",
+"text": { "tag": "lark_md", "content": "{{.Detail}}" }
+}
+{{- end }},
+{
+"tag": "note",
+"elements": [ { "tag": "lark_md", "content": "🕒 {{.TimeCN}} | 🏷️ {{.Group}}" } ]
+}
+]
+{{- end }}
+}
+}

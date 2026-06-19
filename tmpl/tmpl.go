@@ -69,6 +69,9 @@ func projectCN(project string) string {
 	}
 }
 
+// ProjectCN 是 projectCN 的导出封装，供 server 包给 progress 卡片填中文业务线名。
+func ProjectCN(project string) string { return projectCN(project) }
+
 // firstSummary 取一组 firing alert 的首条 summary（中文摘要），用于标题展示。
 func firstSummary(alerts []amtmpl.Alert) string {
 	for _, a := range alerts {

@@ -9,12 +9,12 @@ import (
 
 	"github.com/davecgh/go-spew/spew"
 	"github.com/gorilla/mux"
-	"github.com/prometheus/alertmanager/template"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
 	"github.com/bendusy/idc-alert-feishu/feishu"
 	"github.com/bendusy/idc-alert-feishu/model"
+	"github.com/bendusy/idc-alert-feishu/tmpl"
 )
 
 type Server struct {
@@ -84,14 +84,48 @@ func (s Server) hook(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "ok")
 }
 
-// progressRequest 进度通道的精简上报格式（旁路 Alertmanager）
+// progressOption / progressQuestion / progressRequest 是进度通道（旁路 Alertmanager）
+// 的精简上报格式。字段命名向 CC 官方 channels 契约靠拢，便于未来并入 feishu_hub。
+type progressOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+type progressQuestion struct {
+	Question string           `json:"question"`
+	Options  []progressOption `json:"options"`
+}
+
 type progressRequest struct {
+	// Kind: "" / "progress"（默认，普通进度/响铃）| "question"（CC 选项卡 permission_request）
+	Kind    string `json:"kind"`
 	Summary string `json:"summary"`
 	Detail  string `json:"detail"`
+	// kind=question 时使用
+	Project   string             `json:"project"`
+	Cwd       string             `json:"cwd"`
+	RequestID string             `json:"request_id"`
+	Questions []progressQuestion `json:"questions"`
+}
+
+// progressColor 从 summary 的状态 emoji 前缀推断卡片颜色。
+func progressColor(summary string) string {
+	switch {
+	case strings.HasPrefix(summary, "🚦"):
+		return "blue"
+	case strings.HasPrefix(summary, "✅"):
+		return "green"
+	case strings.HasPrefix(summary, "❌"):
+		return "red"
+	case strings.HasPrefix(summary, "🔔"):
+		return "yellow"
+	default:
+		return "grey"
+	}
 }
 
 // progress 进度/事件上报端点：旁路 Alertmanager，接精简 payload，
-// 包装成 info severity 的 firing alert 复用 idc.tmpl 渲染（灰卡、不 @）。
+// 用 progress.tmpl 渲染专属出站卡片（不再伪装成 firing alert）。
 // 即时逐条发，无 group/dedup/inhibit/resolved。带 per-project 限流。
 func (s Server) progress(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
@@ -115,32 +149,45 @@ func (s Server) progress(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Summary == "" {
-		http.Error(w, "summary required", http.StatusBadRequest)
-		return
+
+	msg := &model.ProgressMessage{
+		Kind:    req.Kind,
+		Group:   group,
+		GroupCN: tmpl.ProjectCN(group),
+		TimeCN:  time.Now().Format("2006-01-02 15:04:05"),
 	}
 
-	// 包装成 info firing alert，复用告警卡片模板
-	msg := model.WebhookMessage{
-		Data: template.Data{
-			Status: "firing",
-			Alerts: template.Alerts{
-				{
-					Status: "firing",
-					Labels: template.KV{"severity": "info", "project": group, "alertname": req.Summary},
-					Annotations: template.KV{
-						"summary":     req.Summary,
-						"description": req.Detail,
-					},
-				},
-			},
-			GroupLabels:  template.KV{"alertname": req.Summary, "severity": "info"},
-			CommonLabels: template.KV{"severity": "info", "project": group},
-		},
+	if req.Kind == "question" {
+		if len(req.Questions) == 0 {
+			http.Error(w, "questions required for kind=question", http.StatusBadRequest)
+			return
+		}
+		msg.Color = "orange"
+		msg.Project = req.Project
+		msg.Cwd = req.Cwd
+		msg.RequestID = req.RequestID
+		for i, q := range req.Questions {
+			mq := model.ProgressQuestion{Index: i + 1, Question: q.Question}
+			for _, o := range q.Options {
+				mq.Options = append(mq.Options, model.ProgressOption{Label: o.Label, Description: o.Description})
+			}
+			msg.Questions = append(msg.Questions, mq)
+		}
+	} else {
+		if req.Summary == "" {
+			http.Error(w, "summary required", http.StatusBadRequest)
+			return
+		}
+		msg.Summary = req.Summary
+		msg.Detail = req.Detail
+		msg.Color = progressColor(req.Summary)
+		// bell 卡片（summary 带 🔔）走"响铃"标题分支：用 Project 字段非空区分（复用模板分支）
+		if strings.HasPrefix(req.Summary, "🔔") {
+			msg.Project = group
+		}
 	}
-	msg.Meta = map[string]string{"group": group}
 
-	if err := bot.Send(&msg); err != nil {
+	if err := bot.SendProgress(msg); err != nil {
 		logrus.Errorf("progress: cannot send, %s", err)
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

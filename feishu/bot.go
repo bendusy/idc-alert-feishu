@@ -26,6 +26,7 @@ type Bot struct {
 	sdk         *Sdk
 	tpl         *template.Template
 	alertTpl    *template.Template
+	progressTpl *template.Template
 	titlePrefix string
 	metadata    map[string]string
 }
@@ -51,6 +52,13 @@ func New(bot *config.Bot, helper *EmailHelper) (*Bot, error) {
 		return nil, err
 	}
 
+	// 出站推送专属模板：始终用 embed 的 progress.tmpl，不受 custom_path 影响
+	// （进度/选项卡不该被告警的自定义模板覆盖）。
+	progressTpl, err := tmpl.GetEmbedTemplate("progress.tmpl")
+	if err != nil {
+		return nil, err
+	}
+
 	return &Bot{
 		webhook:     bot.Webhook,
 		sign:        bot.Sign,
@@ -59,6 +67,7 @@ func New(bot *config.Bot, helper *EmailHelper) (*Bot, error) {
 		sdk:         NewSDK("", ""),
 		tpl:         tpl,
 		alertTpl:    alertTpl,
+		progressTpl: progressTpl,
 		titlePrefix: bot.TitlePrefix,
 		metadata:    bot.MetaData,
 	}, nil
@@ -134,6 +143,65 @@ func (b Bot) Send(alerts *model.WebhookMessage) error {
 	var buf bytes.Buffer
 	err = b.tpl.Execute(&buf, alerts)
 	if err != nil {
+		return err
+	}
+	if logrus.IsLevelEnabled(logrus.DebugLevel) {
+		if d, err := beautifyJSON(buf.String()); err != nil {
+			logrus.Error(err)
+			fmt.Println(buf.String())
+		} else {
+			fmt.Println(d)
+		}
+	}
+
+	return b.sdk.WebhookV2(b.webhook, &buf, b.sign)
+}
+
+// SendProgress 渲染出站推送专属卡片（progress/bell/question），脱离告警模板。
+// 所有外部字段（summary/detail/问题/选项文本）在此处统一 Clean（去控制符）+ JSONString
+// （转义 " \ 换行等），再交给 progress.tmpl 直接输出，避免破坏 JSON 结构（飞书 99991300）。
+func (b Bot) SendProgress(msg *model.ProgressMessage) error {
+	// 转义辅助：去不可打印字符后做 JSON 字符串转义（不含外层引号）
+	esc := func(s string) string { return tmpl.JSONString(stringsx.Clean(s)) }
+
+	safe := *msg
+	safe.Summary = esc(msg.Summary)
+	safe.Detail = esc(msg.Detail)
+	safe.Project = esc(msg.Project)
+	safe.Cwd = esc(msg.Cwd)
+	safe.GroupCN = esc(msg.GroupCN)
+	// Group 来自 URL path、RequestID 来自 HTTP body，均外部可控，必须转义。
+	// Color/TimeCN 由本服务生成（受控），不转义。
+	safe.Group = esc(msg.Group)
+	safe.RequestID = esc(msg.RequestID)
+
+	// 预处理每个问题：拼选项 markdown 并整段转义
+	safe.Questions = make([]model.ProgressQuestion, len(msg.Questions))
+	for i, q := range msg.Questions {
+		nums := []string{"1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"}
+		var md string
+		for j, opt := range q.Options {
+			marker := "▫️"
+			if j < len(nums) {
+				marker = nums[j]
+			}
+			md += fmt.Sprintf("%s **%s**", marker, stringsx.Clean(opt.Label))
+			if d := stringsx.Clean(opt.Description); d != "" {
+				md += "\n└ " + d
+			}
+			if j < len(q.Options)-1 {
+				md += "\n\n"
+			}
+		}
+		safe.Questions[i] = model.ProgressQuestion{
+			Index:           q.Index,
+			Question:        tmpl.JSONString(stringsx.Clean(q.Question)),
+			OptionsMarkdown: tmpl.JSONString(md),
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := b.progressTpl.Execute(&buf, &safe); err != nil {
 		return err
 	}
 	if logrus.IsLevelEnabled(logrus.DebugLevel) {
